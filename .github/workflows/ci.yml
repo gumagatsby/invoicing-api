@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env: {POSTGRES_USER: invoicing, POSTGRES_PASSWORD: invoicing, POSTGRES_DB: invoicing_test}
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U invoicing" --health-interval 2s --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    defaults:
+      run:
+        working-directory: api
+    env:
+      APP_DATABASE_URL: postgresql+asyncpg://invoicing:invoicing@localhost:5432/invoicing_test
+      APP_JWT_SECRET: ci-only-secret-not-used-anywhere-else-0123456789
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r requirements-dev.txt
+      - name: Tests (real PostgreSQL and Redis)
+        run: pytest -q
+      - name: Migrations build the schema the code expects
+        run: |
+          psql postgresql://invoicing:invoicing@localhost:5432/postgres -c "CREATE DATABASE migrations_check"
+          APP_DATABASE_URL=postgresql+asyncpg://invoicing:invoicing@localhost:5432/migrations_check alembic upgrade head
+          APP_DATABASE_URL=postgresql+asyncpg://invoicing:invoicing@localhost:5432/migrations_check alembic check
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+
+  stack:
+    name: full stack + load test
+    runs-on: ubuntu-latest
+    needs: [api, web]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the stack
+        run: |
+          echo "APP_JWT_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')" > .env
+          echo "APP_RATE_LIMIT_PER_MINUTE=100000" >> .env
+          docker compose up -d --build --wait db redis migrate api worker
+      - name: Load test (k6, 20 users for 60 seconds)
+        run: docker run --rm --network invoicing_default -v "$PWD/loadtest:/scripts" grafana/k6:0.54.0 run /scripts/payments.js

@@ -1,0 +1,106 @@
+<!doctype html><html lang="en-GB"><head><meta charset="utf-8"><title>Walkthrough: Invoicing and payments API</title>
+<style>
+@page{size:A4;margin:16mm 16mm 18mm}
+body{font:10.2pt/1.5 "Helvetica Neue",Helvetica,Arial,sans-serif;color:#16191f;margin:0}
+h1{font-size:21pt;margin:0 0 2px;color:#1f3b63}
+.sub{color:#4a5260;margin:0 0 14px}
+h2{font-size:14pt;color:#1f3b63;margin:20px 0 6px;padding-top:6px;border-top:2px solid #1f3b63;break-after:avoid}
+h3{font-size:11pt;margin:12px 0 4px;break-after:avoid}
+p{margin:4px 0}
+ul,ol{margin:4px 0;padding-left:18px}li{margin:2px 0}
+code{font:9pt/1.4 Menlo,monospace;background:#eef1f5;padding:1px 4px;border-radius:3px}
+pre{font:8.6pt/1.45 Menlo,monospace;background:#f3f5f8;border:1px solid #dde2ea;border-radius:5px;padding:8px 10px;white-space:pre-wrap;break-inside:avoid;margin:6px 0}
+table{border-collapse:collapse;width:100%;margin:6px 0;font-size:9.4pt;break-inside:avoid}
+th,td{border:1px solid #d3d9e2;padding:4px 6px;text-align:left;vertical-align:top}
+th{background:#e9eef5}
+.box{margin:10px 0;break-inside:avoid}
+.q{font-weight:700;margin-top:8px}
+.a{margin:2px 0 6px}
+img{width:100%;border:1px solid #dde2ea;border-radius:4px;margin:6px 0}
+.page{break-before:page}
+</style></head>
+<body>
+
+<h1>Invoicing and payments API</h1>
+<p class="sub">Walkthrough in five parts: what each piece does, why it was built that way, and how to talk about it in an interview.<br>Repo: github.com/gumagatsby/invoicing-api</p>
+
+<img src="architecture.png" alt="Container diagram">
+
+<div class="box"><b>The one-sentence pitch.</b> I built an invoicing and payments backend in Python and FastAPI where a retried payment can never charge twice, two simultaneous payments can never overpay, every movement of money is a balanced ledger entry, and every event reaches the merchant as a signed webhook even if the server crashes; then I proved it with concurrency tests and a load test.</div>
+
+<h2>Part 1. What it is</h2>
+<table><tr><th>Piece</th><th>Technology</th><th>Job</th></tr>
+<tr><td>API</td><td>Python 3.13, FastAPI, SQLAlchemy (async), Alembic</td><td>Auth, customers, invoices, payments, ledger, webhooks, rate limits</td></tr>
+<tr><td>Worker</td><td>arq</td><td>Sends due webhooks every five seconds, with retries</td></tr>
+<tr><td>Database</td><td>PostgreSQL 17</td><td>All records; row locks and constraints enforce the money rules</td></tr>
+<tr><td>Cache</td><td>Redis 7</td><td>Rate-limit counters shared by every API replica; worker scheduling</td></tr>
+<tr><td>Dashboard</td><td>React, TypeScript, Vite, nginx</td><td>Invoices, payments and the ledger for a signed-in merchant</td></tr>
+<tr><td>Observability</td><td>OpenTelemetry, Jaeger, Prometheus, Grafana</td><td>Traces down to each SQL statement; latency, payment and webhook metrics</td></tr></table>
+<p>Money is stored as integers of pence, cents or euro cents, never floats, and each invoice has one currency.</p>
+
+<h2>Part 2. Payments that cannot go wrong</h2>
+<img src="payment-flow.png" alt="Payment sequence">
+<h3>Idempotency</h3>
+<p>Every payment request carries an <code>Idempotency-Key</code>. If the client never sees the response (a dropped connection, a timeout) and retries with the same key, it gets the original payment back with <code>Idempotent-Replayed: true</code>. The same key with a different amount is a client bug and gets <code>409</code>. The key is unique per merchant <b>in the database</b>, so not even an application bug can record two payments for one key.</p>
+<h3>Concurrency</h3>
+<p>The payment locks the invoice row (<code>SELECT ... FOR UPDATE</code>) before reading the balance, so two simultaneous payments run one after the other and the second sees the first. A <code>CHECK (paid_minor &lt;= total_minor)</code> constraint is the last line of defence.</p>
+<table><tr><th>Concurrency test (real PostgreSQL)</th><th>Result</th></tr>
+<tr><td>20 requests at once, same idempotency key</td><td>1 payment created (201), 19 replays (200), all the same payment ID</td></tr>
+<tr><td>10 requests at once, different keys, each paying the full invoice</td><td>1 accepted, 9 refused (422); paid exactly once</td></tr></table>
+<h3>Double-entry ledger</h3>
+<table><tr><th>Event</th><th>Debit</th><th>Credit</th></tr>
+<tr><td>Invoice issued</td><td>Receivables</td><td>Revenue</td></tr>
+<tr><td>Payment received</td><td>Cash</td><td>Receivables</td></tr>
+<tr><td>Invoice voided</td><td>Revenue</td><td>Receivables (a reversal, never a delete)</td></tr></table>
+<p>Debits always equal credits. <code>/ledger/balances</code> checks this, a test asserts it, and after the load test the database showed debits minus credits = 0.</p>
+
+<h2>Part 3. Webhooks that are never lost</h2>
+<ul>
+<li><b>Outbox:</b> the delivery rows are written in the <b>same transaction</b> as the payment. If the payment commits, the event is recorded; if it rolls back, no false event exists. A crash between "saved" and "sent" loses nothing, because the worker polls the table.</li>
+<li><b>Signed:</b> <code>Invoicing-Signature: t=&lt;time&gt;,v1=&lt;HMAC-SHA256 of time.body&gt;</code>. The receiver verifies it with the secret shown once at registration and rejects anything older than five minutes, which stops replays.</li>
+<li><b>Retried:</b> 1, 2, 4, 8 and 16 minutes apart, then marked failed after six attempts and visible in the delivery log. <code>FOR UPDATE SKIP LOCKED</code> lets several workers run without sending the same delivery twice.</li>
+<li><b>At-least-once:</b> each event has a unique ID so the receiver can ignore duplicates.</li>
+</ul>
+
+<h2>Part 4. Security</h2>
+<ul>
+<li><b>Passwords</b> are hashed with Argon2id. An unknown email still runs a hash check, so login timing does not reveal which emails exist.</li>
+<li><b>Access tokens</b> are JWTs that last 15 minutes. <b>Refresh tokens</b> work once and rotate; presenting a used one revokes the whole family, because it means a copy was stolen.</li>
+<li><b>Tenancy:</b> every query is scoped to the caller. Another merchant's invoice returns <code>404</code>, not <code>403</code>, so IDs cannot be probed.</li>
+<li><b>Rate limiting</b> in Redis: a one-minute window per user, shared across replicas, with <code>429</code> and <code>Retry-After</code>.</li>
+<li>The JWT secret has no default: the app refuses to start without one.</li>
+</ul>
+
+<h2>Part 5. Observability and load</h2>
+<img src="trace.png" alt="Jaeger trace of one payment">
+<p>One payment in Jaeger: the request and every SQL statement inside it, 16 ms in total. Metrics use the route template (<code>/invoices/{invoice_id}/payments</code>), not the raw path, so the number of series stays small.</p>
+<img src="grafana.png" alt="Grafana during the load test">
+<table><tr><th>k6: 20 users, 60 s, full tracing</th><th>Result</th></tr>
+<tr><td>Requests</td><td>10,734 (178 per second), 0 errors</td></tr>
+<tr><td>Payments latency</td><td>p50 108 ms, p95 129 ms, p99 144 ms</td></tr>
+<tr><td>Database afterwards</td><td>No double payments; ledger debits minus credits = 0</td></tr>
+<tr><td>Cost of tracing every SQL statement</td><td>Earlier runs that did not trace SQL: 224 to 226 per second, p95 102 to 105 ms</td></tr></table>
+<div class="box"><b>Something the measurements caught.</b> My first traces had no database spans. The OpenTelemetry SQLAlchemy plugin silently skips SQLAlchemy 2.1, which I was on. I pinned SQLAlchemy 2.0.54, confirmed the SQL spans appeared, and re-ran the load test so the published numbers include the tracing cost.</div>
+
+<h2>Interview questions</h2>
+<p class="q">"How do you stop a customer being charged twice?"</p>
+<p class="a">Idempotency keys: the client sends one per payment attempt and reuses it on retry. The server returns the original result for a repeated key, and a unique constraint in the database guarantees it even if the application has a bug. I tested it with 20 simultaneous retries: one payment.</p>
+<p class="q">"What happens if two payments for the same invoice arrive at the same time?"</p>
+<p class="a">The first locks the invoice row; the second waits, then reads the updated balance and is refused if it would overpay. A CHECK constraint backs that up. Optimistic locking with a version column would also work and scales better under low contention; I chose the simpler model because one invoice rarely sees concurrent payments.</p>
+<p class="q">"Why a double-entry ledger instead of a balance column?"</p>
+<p class="a">A balance column tells you the answer but not how you got there, and an update can silently overwrite it. Append-only entries let you rebuild any balance, audit every change, and prove the books balance.</p>
+<p class="q">"How do you make sure webhooks are not lost?"</p>
+<p class="a">The transactional outbox: write the delivery in the same transaction as the payment, and have a worker send it. Sending from the request handler instead could lose the event if the process died after commit, or send an event for a payment that then rolled back.</p>
+<p class="q">"What would you change for production?"</p>
+<p class="a">Integrate a real payment provider behind the same idempotent interface, use asymmetric JWT keys with rotation, sample traces rather than recording all of them, add a sliding-window rate limiter, and move webhook fan-out to a managed queue at higher volume.</p>
+
+<h2>Checks done (16 October 2026)</h2>
+<table><tr><th>Check</th><th>Result</th></tr>
+<tr><td>pytest against PostgreSQL 17 and Redis 7</td><td>20 of 20 pass</td></tr>
+<tr><td>Concurrency</td><td>20 parallel retries: 1 payment. 10 parallel full payments: 1 accepted</td></tr>
+<tr><td>k6 load test</td><td>10,734 requests, 0 errors, payments p95 129 ms</td></tr>
+<tr><td>Ledger after load</td><td>Debits minus credits = 0; no invoice paid twice</td></tr>
+<tr><td>Dashboard</td><td>TypeScript build and lint pass</td></tr>
+</table>
+
+</body></html>

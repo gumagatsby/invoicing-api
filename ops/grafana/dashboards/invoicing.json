@@ -1,0 +1,170 @@
+{
+ "uid": "invoicing",
+ "title": "Invoicing API",
+ "schemaVersion": 39,
+ "refresh": "5s",
+ "time": {
+  "from": "now-15m",
+  "to": "now"
+ },
+ "panels": [
+  {
+   "id": 1,
+   "type": "timeseries",
+   "title": "Requests per second by route",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "sum by (route) (rate(http_request_duration_seconds_count{route!~\"/metrics|/health\"}[20s]))",
+     "legendFormat": "{{route}}",
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "type": "timeseries",
+   "title": "p95 latency by route",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{route!~\"/metrics|/health\"}[20s])))",
+     "legendFormat": "{{route}}",
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 3,
+   "type": "timeseries",
+   "title": "Error responses (4xx and 5xx)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "(sum by (status) (rate(http_request_duration_seconds_count{status=~\"4..|5..\",route!~\"/metrics|/health\"}[20s]))) or label_replace(vector(0), \"status\", \"none\", \"\", \"\")",
+     "legendFormat": "{{status}}",
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 4,
+   "type": "timeseries",
+   "title": "Payments: created vs idempotent replays (one replay per payment in the load test)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "min": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "created"
+      },
+      "properties": [
+       {
+        "id": "custom.lineWidth",
+        "value": 5
+       }
+      ]
+     }
+    ]
+   },
+   "targets": [
+    {
+     "expr": "sum by (outcome) (rate(payments_total[20s]))",
+     "legendFormat": "{{outcome}}",
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "type": "timeseries",
+   "title": "Webhook delivery attempts by result",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prom"
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 24,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "targets": [
+    {
+     "expr": "(sum by (result) (rate(webhook_attempts_total[5m]))) or label_replace(vector(0), \"result\", \"none\", \"\", \"\")",
+     "legendFormat": "{{result}}",
+     "refId": "A"
+    }
+   ]
+  }
+ ]
+}

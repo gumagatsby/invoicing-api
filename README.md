@@ -6,7 +6,7 @@ A backend for small businesses to invoice customers and record payments, built t
 
 Python, FastAPI, PostgreSQL, Redis, with a React and TypeScript dashboard, OpenTelemetry tracing, Prometheus metrics and Grafana dashboards.
 
-![Container diagram](docs/architecture.png)
+![Architecture](docs/architecture.png)
 
 ## Measured results
 

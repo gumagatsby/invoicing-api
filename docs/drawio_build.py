@@ -203,7 +203,7 @@ d.text("k6, 20 users for 60 s, every SQL statement traced: 10,734 requests, 0 er
        "20 parallel retries of one payment created exactly one.", lx, y + 28, 420, 56, fs=12)
 d.text("Legend", lx, 900, 420, 20, fs=13, bold=True)
 d.text("Solid: request path\nDashed grey: telemetry\nGrey border: outside the system", lx, 922, 420, 60, fs=12, color="#545B64")
-open(f"{OUTDIR}/architecture.drawio", "w").write(d.xml())
+# architecture.drawio is now edited directly in draw.io (AWS reference-architecture style), not generated here.
 
 # =====================================================================
 # 2. Payment sequence

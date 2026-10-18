@@ -82,7 +82,7 @@ The tests run against real PostgreSQL and Redis because locking, unique constrai
 | [`web`](web) | React and TypeScript dashboard (Vite, served by nginx) |
 | [`ops`](ops) | Prometheus config and the provisioned Grafana dashboard |
 | [`loadtest`](loadtest) | k6 script |
-| [`docs`](docs) | Diagrams, decisions, load test results, walkthrough |
+| [`docs`](docs) | Diagrams, decisions, load test results |
 
 See [docs/decisions.md](docs/decisions.md) for why each choice was made and what production would add.
 

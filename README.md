@@ -1,6 +1,6 @@
 # Invoicing and payments API
 
-[![ci](https://github.com/gumagatsby/invoicing-api/actions/workflows/ci.yml/badge.svg)](https://github.com/gumagatsby/invoicing-api/actions/workflows/ci.yml)
+[![ci](https://github.com/tapiwa-magumise/invoicing-api/actions/workflows/ci.yml/badge.svg)](https://github.com/tapiwa-magumise/invoicing-api/actions/workflows/ci.yml)
 
 A backend for small businesses to invoice customers and record payments, built the way payment systems have to be: a retried request never charges twice, two payments at once cannot overpay an invoice, every movement of money is a balanced ledger entry, and every event reaches the merchant's systems as a signed webhook, even if a server crashes at the wrong moment.
 

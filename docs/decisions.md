@@ -22,9 +22,9 @@ Issuing an invoice debits receivables and credits revenue. A payment debits cash
 
 When a payment succeeds, the webhook delivery rows are written **in the same transaction** as the payment (the transactional outbox pattern). A worker sends due deliveries every five seconds. So a crash after the payment commits cannot lose the event, and a crash before it commits sends nothing false.
 
-- **Signed:** each request carries `Invoicing-Signature: t=<timestamp>,v1=<HMAC-SHA256 of timestamp.body>`. Receivers verify it with the secret they were given once, and reject anything older than five minutes, which stops replays.
-- **Retried:** failures back off 1, 2, 4, 8 and 16 minutes, then the delivery is marked failed after 6 attempts and stays visible in `/webhooks/{id}/deliveries`.
-- **At-least-once:** a receiver may see an event twice, so each event has a unique `id` for the receiver to de-duplicate on.
+- Signed: each request carries `Invoicing-Signature: t=<timestamp>,v1=<HMAC-SHA256 of timestamp.body>`. Receivers verify it with the secret they were given once, and reject anything older than five minutes, which stops replays.
+- Retried: failures back off 1, 2, 4, 8 and 16 minutes, then the delivery is marked failed after 6 attempts and stays visible in `/webhooks/{id}/deliveries`.
+- At-least-once: a receiver may see an event twice, so each event has a unique `id` for the receiver to de-duplicate on.
 
 ## 6. Short access tokens, rotating refresh tokens
 
@@ -40,8 +40,8 @@ A fixed one-minute window per user, counted in Redis so the limit holds across a
 
 ## 9. Observability built in
 
-- **Metrics:** Prometheus histograms of latency by route template (not raw path, which would explode cardinality), payment outcomes, and webhook attempts from the worker. Grafana is provisioned with a dashboard.
-- **Traces:** OpenTelemetry instruments FastAPI and SQLAlchemy and exports to Jaeger, so a slow request can be followed down to the SQL statement. Tracing is off unless an endpoint is configured, so tests need nothing extra.
+- Metrics: Prometheus histograms of latency by route template (not raw path, which would explode cardinality), payment outcomes, and webhook attempts from the worker. Grafana is provisioned with a dashboard.
+- Traces: OpenTelemetry instruments FastAPI and SQLAlchemy and exports to Jaeger, so a slow request can be followed down to the SQL statement. Tracing is off unless an endpoint is configured, so tests need nothing extra.
 
 ## 10. Tests against real PostgreSQL and Redis
 

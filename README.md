@@ -60,6 +60,8 @@ docker compose up -d --build --wait
 | Jaeger | http://localhost:16686 |
 | Prometheus | http://localhost:9090 |
 
+On the dashboard, **Try the demo** signs in to `demo@example.com`, which the `demo` service rebuilds each time the stack starts: five customers and eight invoices covering open, overdue, part paid, paid, void and a second currency. Its webhook endpoint points at the `receiver` service, so recording a payment shows a signed delivery in the Webhooks page and in `docker compose logs receiver`. To reset the demo data without restarting: `docker compose run --rm demo`.
+
 Load test: `docker run --rm --network invoicing_default -v "$PWD/loadtest:/scripts" grafana/k6:0.54.0 run /scripts/payments.js` (raise `APP_RATE_LIMIT_PER_MINUTE` first, or the limiter will answer most requests with 429).
 
 ## Tests

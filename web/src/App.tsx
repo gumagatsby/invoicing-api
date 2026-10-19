@@ -1,172 +1,82 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api, ApiError, money, signedIn, signIn, signOut, type Balances, type Currency, type Customer, type Invoice, type LedgerRow, type Payment } from './api'
+import { useCallback, useState } from 'react'
+import { DEMO, ApiError, register, signedIn, signedInAs, signIn, signOut } from './api'
+import { Customers } from './customers'
+import { Invoices, NewInvoice } from './invoices'
+import { go, useRoute } from './hooks'
+import { Problem } from './ui'
+import { Webhooks } from './webhooks'
 
 export default function App() {
   const [authed, setAuthed] = useState(signedIn())
-  return authed ? <Dashboard onSignOut={() => { signOut(); setAuthed(false) }} /> : <SignIn onDone={() => setAuthed(true)} />
+  const leave = useCallback(() => { signOut(); setAuthed(false) }, [])
+  return authed ? <Shell onSignOut={leave} /> : <SignIn onDone={() => { setAuthed(true); go('invoices') }} />
 }
 
 function SignIn({ onDone }: { onDone: () => void }) {
+  const [creating, setCreating] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [register, setRegister] = useState(false)
   const [error, setError] = useState('')
-  return (
-    <main className="narrow">
-      <h1>Invoicing</h1>
-      <form onSubmit={async e => {
-        e.preventDefault(); setError('')
-        try { await signIn(email, password, register); onDone() } catch (err) { setError((err as Error).message) }
-      }}>
-        <label>Email<input type="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
-        <label>Password<input type="password" required minLength={12} value={password} onChange={e => setPassword(e.target.value)} /></label>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button type="submit">{register ? 'Create account' : 'Sign in'}</button>
-        <button type="button" className="link" onClick={() => setRegister(!register)}>
-          {register ? 'I already have an account' : 'Create an account'}
-        </button>
-      </form>
-    </main>
-  )
-}
+  const [busy, setBusy] = useState(false)
 
-function Dashboard({ onSignOut }: { onSignOut: () => void }) {
-  const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [balances, setBalances] = useState<Balances>({})
-  const [selected, setSelected] = useState<string | null>(null)
-  const [error, setError] = useState('')
-
-  const load = useCallback(async () => {
-    try {
-      const [inv, cus, bal] = await Promise.all([api.invoices(), api.customers(), api.balances()])
-      setInvoices(inv.items); setCustomers(cus); setBalances(bal)
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) onSignOut(); else setError((e as Error).message)
-    }
-  }, [onSignOut])
-  useEffect(() => { void load() }, [load])
+  async function attempt(fn: () => Promise<void>) {
+    setBusy(true); setError('')
+    try { await fn(); onDone() } catch (e) {
+      setError(e instanceof ApiError && e.status === 401 && fn === demo
+        ? 'The demo account isn’t there. Start the stack with docker compose up, which creates it.'
+        : (e as Error).message)
+    } finally { setBusy(false) }
+  }
+  const demo = () => signIn(DEMO.email, DEMO.password)
 
   return (
-    <main>
-      <header><h1>Invoicing</h1><button className="link" onClick={onSignOut}>Sign out</button></header>
-      {error && <p className="error" role="alert">{error}</p>}
-      <section>
-        <h2>Ledger</h2>
-        {Object.keys(balances).length === 0 ? <p className="muted">No entries yet.</p> : (
-          <table>
-            <thead><tr><th>Currency</th><th>Cash</th><th>Receivables</th><th>Revenue</th><th>Balanced</th></tr></thead>
-            <tbody>{Object.entries(balances).map(([cur, accts]) => {
-              const bal = (a: string) => { const v = accts[a]; return typeof v === 'object' ? money(v.balance_minor, cur as Currency) : '–' }
-              return <tr key={cur}><td>{cur}</td><td>{bal('cash')}</td><td>{bal('receivables')}</td><td>{bal('revenue')}</td><td>{accts._balanced ? 'Yes' : 'No'}</td></tr>
-            })}</tbody>
-          </table>
-        )}
-      </section>
-      <section>
-        <h2>Invoices</h2>
-        <table>
-          <thead><tr><th>Customer</th><th>Created</th><th>Total</th><th>Outstanding</th><th>Status</th><th>Due</th></tr></thead>
-          <tbody>{invoices.map(i => (
-            <tr key={i.id} className={i.id === selected ? 'selected' : ''} onClick={() => setSelected(i.id)}>
-              <td>{customers.find(c => c.id === i.customer_id)?.name ?? ''}</td>
-              <td>{new Date(i.created_at).toLocaleDateString('en-GB')}</td><td>{money(i.total_minor, i.currency)}</td>
-              <td>{money(i.outstanding_minor, i.currency)}</td><td>{i.status}</td><td>{i.due_date}</td>
-            </tr>))}</tbody>
-        </table>
-        {invoices.length === 0 && <p className="muted">No invoices yet.</p>}
-      </section>
-      {selected && <InvoiceDetail id={selected} onChange={load} />}
-      <NewInvoice customers={customers} onCreated={load} />
-    </main>
-  )
-}
-
-function InvoiceDetail({ id, onChange }: { id: string; onChange: () => void }) {
-  const [inv, setInv] = useState<Invoice | null>(null)
-  const [payments, setPayments] = useState<Payment[]>([])
-  const [ledger, setLedger] = useState<LedgerRow[]>([])
-  const [amount, setAmount] = useState('')
-  const [error, setError] = useState('')
-  const refresh = useCallback(async () => {
-    const [i, p, l] = await Promise.all([api.invoice(id), api.payments(id), api.ledger(id)])
-    setInv(i); setPayments(p); setLedger(l)
-  }, [id])
-  useEffect(() => { void refresh() }, [refresh])
-  if (!inv) return null
-  return (
-    <section>
-      <h2>Invoice {inv.id.slice(0, 8)}</h2>
-      <p>{money(inv.paid_minor, inv.currency)} paid of {money(inv.total_minor, inv.currency)}.</p>
-      {inv.status === 'open' && (
-        <form className="inline" onSubmit={async e => {
-          e.preventDefault(); setError('')
-          try {
-            await api.pay(id, Math.round(parseFloat(amount) * 100), inv.currency, crypto.randomUUID())
-            setAmount(''); await refresh(); onChange()
-          } catch (err) { setError((err as Error).message) }
-        }}>
-          <label>Amount ({inv.currency})<input inputMode="decimal" required pattern="\d+(\.\d{1,2})?" value={amount} onChange={e => setAmount(e.target.value)} /></label>
-          <button type="submit">Record payment</button>
+    <div className="signin">
+      <div className="card">
+        <h1>Invoicing</h1>
+        <p className="lead">Send invoices, record payments and keep the books balanced.</p>
+        <button className="btn primary wide" disabled={busy} onClick={() => attempt(demo)}>Try the demo</button>
+        <p className="hint centre">Signs you in to an account with sample invoices. It is rebuilt each time the stack starts.</p>
+        <div className="or">{creating ? 'or create an account' : 'or sign in'}</div>
+        <form onSubmit={e => { e.preventDefault(); void attempt(() => creating ? register(email, password) : signIn(email, password)) }}>
+          <label>Email<input type="email" autoComplete="email" required value={email} onChange={e => setEmail(e.target.value)} /></label>
+          <label>Password
+            <input type="password" autoComplete={creating ? 'new-password' : 'current-password'} required
+              value={password} onChange={e => setPassword(e.target.value)} aria-describedby="pw-rule" />
+            <span className="hint" id="pw-rule">At least 12 characters.</span>
+          </label>
+          <Problem text={error} />
+          <button className="btn wide" type="submit" disabled={busy}>{creating ? 'Create account' : 'Sign in'}</button>
         </form>
-      )}
-      {error && <p className="error" role="alert">{error}</p>}
-      <h3>Payments</h3>
-      {payments.length === 0 ? <p className="muted">None yet.</p> : (
-        <ul>{payments.map(p => <li key={p.id}>{money(p.amount_minor, p.currency)} on {new Date(p.created_at).toLocaleString('en-GB')}</li>)}</ul>
-      )}
-      <h3>Ledger entries</h3>
-      <table>
-        <thead><tr><th>Account</th><th>Debit</th><th>Credit</th><th>Memo</th></tr></thead>
-        <tbody>{ledger.map((r, n) => (
-          <tr key={n}><td>{r.account}</td><td>{r.debit_minor ? money(r.debit_minor, r.currency) : ''}</td>
-            <td>{r.credit_minor ? money(r.credit_minor, r.currency) : ''}</td><td>{r.memo}</td></tr>))}</tbody>
-      </table>
-    </section>
+        <p className="swap">
+          {creating ? 'Already have an account? ' : 'New here? '}
+          <button className="link" onClick={() => { setCreating(!creating); setError('') }}>{creating ? 'Sign in' : 'Create an account'}</button>
+        </p>
+      </div>
+    </div>
   )
 }
 
-function NewInvoice({ customers, onCreated }: { customers: Customer[]; onCreated: () => void }) {
-  const [customer, setCustomer] = useState('')
-  const [newName, setNewName] = useState('')
-  const [newEmail, setNewEmail] = useState('')
-  const [currency, setCurrency] = useState<Currency>('GBP')
-  const [description, setDescription] = useState('')
-  const [price, setPrice] = useState('')
-  const [error, setError] = useState('')
+function Shell({ onSignOut }: { onSignOut: () => void }) {
+  const route = useRoute()
+  const [section = 'invoices', id] = route
+  const isDemo = signedInAs() === DEMO.email
+  const nav = (key: string, label: string) =>
+    <a href={`#/${key}`} aria-current={section === key ? 'page' : undefined}>{label}</a>
   return (
-    <section>
-      <h2>New invoice</h2>
-      <form onSubmit={async e => {
-        e.preventDefault(); setError('')
-        try {
-          const customerId = customer || (await api.addCustomer(newName, newEmail)).id
-          const due = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10)
-          await api.createInvoice({ customer_id: customerId, currency, due_date: due,
-            lines: [{ description, quantity: 1, unit_price_minor: Math.round(parseFloat(price) * 100) }] })
-          setDescription(''); setPrice(''); onCreated()
-        } catch (err) { setError((err as Error).message) }
-      }}>
-        <label>Customer
-          <select value={customer} onChange={e => setCustomer(e.target.value)}>
-            <option value="">New customer</option>
-            {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-        </label>
-        {!customer && <>
-          <label>Customer name<input required value={newName} onChange={e => setNewName(e.target.value)} /></label>
-          <label>Customer email<input type="email" required value={newEmail} onChange={e => setNewEmail(e.target.value)} /></label>
-        </>}
-        <label>Currency
-          <select value={currency} onChange={e => setCurrency(e.target.value as Currency)}>
-            <option>GBP</option><option>USD</option><option>EUR</option>
-          </select>
-        </label>
-        <label>Work<input required value={description} onChange={e => setDescription(e.target.value)} /></label>
-        <label>Price<input inputMode="decimal" required pattern="\d+(\.\d{1,2})?" value={price} onChange={e => setPrice(e.target.value)} /></label>
-        {error && <p className="error" role="alert">{error}</p>}
-        <button type="submit">Create invoice</button>
-      </form>
-    </section>
+    <div className="app">
+      <nav className="side" aria-label="Sections">
+        <div className="brand">Invoicing{isDemo && <span className="demo">Demo</span>}</div>
+        {nav('invoices', 'Invoices')}
+        {nav('customers', 'Customers')}
+        {nav('webhooks', 'Webhooks')}
+        <div className="who"><span>{signedInAs()}</span><button className="link" onClick={onSignOut}>Sign out</button></div>
+      </nav>
+      <main className="main">
+        {section === 'customers' ? <Customers onAuthLost={onSignOut} />
+          : section === 'webhooks' ? <Webhooks onAuthLost={onSignOut} />
+          : id === 'new' ? <NewInvoice onAuthLost={onSignOut} />
+          : <Invoices selected={id ?? null} onAuthLost={onSignOut} />}
+      </main>
+    </div>
   )
 }

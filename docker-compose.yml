@@ -57,6 +57,19 @@ services:
       migrate: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
 
+  # The demo account, rebuilt on every start, and a receiver for its webhooks.
+  demo:
+    build: ./api
+    command: ["python", "-m", "app.demo"]
+    environment: *app-env
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  receiver:
+    build: ./api
+    command: ["python", "-m", "app.demo_receiver"]
+
   web:
     build: ./web
     ports: ["127.0.0.1:8081:80"]

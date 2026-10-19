@@ -7,6 +7,8 @@ x-app-env: &app-env
   APP_JWT_SECRET: ${APP_JWT_SECRET:?set APP_JWT_SECRET in .env (see .env.example)}
   APP_OTEL_ENDPOINT: http://jaeger:4318
   APP_RATE_LIMIT_PER_MINUTE: ${APP_RATE_LIMIT_PER_MINUTE:-120}
+  # The demo's receiver is on the private Docker network; every other webhook host must be public
+  APP_WEBHOOK_ALLOWED_HOSTS: '["receiver"]'
 
 services:
   db:

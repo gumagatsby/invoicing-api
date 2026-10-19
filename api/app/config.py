@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     refresh_token_days: int = 7
     rate_limit_per_minute: int = 120
     webhook_max_attempts: int = 6
+    # Hosts the worker may post to even though they resolve to private addresses (the demo's receiver)
+    webhook_allowed_hosts: list[str] = []
     otel_endpoint: str | None = None  # e.g. http://jaeger:4318 ; tracing is off when unset
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:8081"]
 

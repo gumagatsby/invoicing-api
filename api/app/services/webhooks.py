@@ -1,19 +1,91 @@
 """Outgoing webhooks: recorded with the event (outbox), signed, delivered by the worker with retries."""
+import asyncio
 import hashlib
 import hmac
+import ipaddress
 import json
 import secrets
+import socket
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import httpcore
 import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import settings
 from ..models import WebhookDelivery, WebhookEndpoint
 
 SIGNATURE_HEADER = "Invoicing-Signature"
+
+
+# ---------- Server-side request forgery ----------
+# A merchant chooses the URL the worker posts to, so without a check they could point it at
+# localhost, the cloud metadata service (169.254.169.254) or another container on our network.
+
+def is_public(ip: str) -> bool:
+    addr = ipaddress.ip_address(ip)
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped:
+        addr = addr.ipv4_mapped
+    return addr.is_global and not addr.is_multicast
+
+
+def allowed_url_host(host: str, allowed: list[str] | None = None) -> bool:
+    """The check when an endpoint is saved: no localhost and no private IP written into the URL.
+    Hostnames are not resolved here, because a merchant's DNS may not be live yet; the worker checks every connection."""
+    host = host.strip("[]").lower()
+    if host in (allowed if allowed is not None else settings().webhook_allowed_hosts):
+        return True
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        return is_public(host)
+    except ValueError:
+        return True  # a hostname
+
+
+class BlockedAddress(httpcore.ConnectError):
+    pass
+
+
+class GuardedBackend(httpcore.AsyncNetworkBackend):
+    """Resolves the host itself, refuses any address that is not public, then connects to the address it checked,
+    so DNS cannot answer differently between the check and the connection."""
+
+    def __init__(self, allowed: list[str]):
+        self.allowed, self.inner = set(allowed), httpcore.AnyIOBackend()
+
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        ips = [info[4][0] for info in infos]
+        if host not in self.allowed and not all(is_public(ip) for ip in ips):
+            raise BlockedAddress(f"{host} resolves to an address that is not public")
+        error = None
+        for ip in dict.fromkeys(ips):  # each checked address in turn, as a normal client would
+            try:
+                return await self.inner.connect_tcp(ip, port, timeout, local_address, socket_options)
+            except httpcore.ConnectError as e:
+                error = e
+        raise error or httpcore.ConnectError(f"{host} did not resolve")
+
+    async def connect_unix_socket(self, path, timeout=None, socket_options=None):
+        raise BlockedAddress("Unix sockets are not allowed")
+
+    async def sleep(self, seconds):
+        await self.inner.sleep(seconds)
+
+
+def http_client(allowed: list[str] | None = None) -> httpx.AsyncClient:
+    """The worker's client: no redirects, no proxies from the environment, and every connection checked."""
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    # httpx 0.28 has no option for the network backend, so the pool is rebuilt with the same TLS settings.
+    # tests/test_webhooks.py proves the guard is in the path, so an httpx upgrade that breaks this fails CI.
+    transport._pool = httpcore.AsyncConnectionPool(
+        ssl_context=transport._pool._ssl_context,
+        network_backend=GuardedBackend(allowed if allowed is not None else settings().webhook_allowed_hosts))
+    return httpx.AsyncClient(transport=transport, follow_redirects=False, trust_env=False)
 
 
 def new_secret() -> str:

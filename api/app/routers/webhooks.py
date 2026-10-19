@@ -8,13 +8,15 @@ from ..db import get_session
 from ..deps import rate_limited
 from ..models import User, WebhookDelivery, WebhookEndpoint
 from ..schemas import DeliveryOut, WebhookIn, WebhookOut
-from ..services.webhooks import new_secret
+from ..services.webhooks import allowed_url_host, new_secret
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
 @router.post("", response_model=WebhookOut, status_code=201)
 async def create(body: WebhookIn, user: User = Depends(rate_limited), session: AsyncSession = Depends(get_session)):
+    if not allowed_url_host(body.url.host or ""):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "The webhook URL must point at a public address")
     ep = WebhookEndpoint(owner_id=user.id, url=str(body.url), secret=new_secret())
     session.add(ep)
     await session.commit()

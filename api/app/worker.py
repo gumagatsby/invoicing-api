@@ -2,7 +2,6 @@
 Polling the outbox table means a crash between saving an event and sending it loses nothing."""
 from datetime import UTC, datetime
 
-import httpx
 from arq import cron
 from arq.connections import RedisSettings
 from prometheus_client import start_http_server
@@ -12,7 +11,7 @@ from .config import settings
 from .db import SessionLocal
 from .metrics import WEBHOOKS
 from .models import WebhookDelivery
-from .services.webhooks import deliver
+from .services.webhooks import deliver, http_client
 
 
 async def send_due(ctx) -> int:
@@ -29,7 +28,7 @@ async def send_due(ctx) -> int:
 
 async def startup(ctx):
     start_http_server(9100)  # Prometheus scrapes the worker here
-    ctx["http"] = httpx.AsyncClient(follow_redirects=False)
+    ctx["http"] = http_client()
 
 
 async def shutdown(ctx):

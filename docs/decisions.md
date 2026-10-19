@@ -25,6 +25,7 @@ When a payment succeeds, the webhook delivery rows are written **in the same tra
 - Signed: each request carries `Invoicing-Signature: t=<timestamp>,v1=<HMAC-SHA256 of timestamp.body>`. Receivers verify it with the secret they were given once, and reject anything older than five minutes, which stops replays.
 - Retried: failures back off 1, 2, 4, 8 and 16 minutes, then the delivery is marked failed after 6 attempts and stays visible in `/webhooks/{id}/deliveries`.
 - At-least-once: a receiver may see an event twice, so each event has a unique `id` for the receiver to de-duplicate on.
+- Only public addresses: the merchant chooses the URL the worker posts to, so without a check it could be pointed at localhost, the cloud metadata service or another container (server-side request forgery). Saving an endpoint rejects localhost and private IP addresses written into the URL. The real check is in the worker: it resolves the host itself, refuses any address that is not public, and connects to the address it checked, so a DNS answer that changes after the endpoint is saved does not get through. Redirects are not followed and proxy settings from the environment are ignored. `APP_WEBHOOK_ALLOWED_HOSTS` exempts named hosts; the stack uses it for the demo's `receiver`. The cost: httpx 0.28 has no setting for this, so the worker's client replaces the transport's connection pool, and a test fails if an httpx upgrade takes the check out of the path.
 
 ## 6. Short access tokens, rotating refresh tokens
 

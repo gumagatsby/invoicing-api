@@ -1,8 +1,10 @@
+import asyncio
 import json
 import time
 import uuid
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
@@ -66,3 +68,37 @@ async def test_failing_endpoint_retries_then_fails(client):
     assert results == ["pending", "pending", "failed"]
     d = [x for x in await _deliveries(ep["id"]) if x.id == d.id][0]
     assert d.attempts == 3 and d.last_status_code == 503
+
+
+async def test_webhook_urls_must_point_at_public_addresses(client):
+    h = await merchant(client)
+    for url in ["http://127.0.0.1/in", "http://localhost:8000/in", "http://169.254.169.254/latest/meta-data/",
+                "http://10.0.0.5/in", "http://[::1]/in", "http://[::ffff:192.168.1.1]/in", "http://api.localhost/in"]:
+        r = await client.post("/webhooks", json={"url": url}, headers=h)
+        assert r.status_code == 422, url
+        assert r.json()["detail"] == "The webhook URL must point at a public address"
+    assert (await client.post("/webhooks", json={"url": "https://hooks.example.com/in"}, headers=h)).status_code == 201
+
+
+async def _local_server():
+    """A real HTTP server on 127.0.0.1 that answers 204, to prove what the guarded client will and will not reach."""
+    async def answer(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        await writer.drain()
+        writer.close()
+    server = await asyncio.start_server(answer, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+async def test_worker_refuses_to_connect_to_private_addresses():
+    server, port = await _local_server()
+    async with server:
+        # A hostname that resolves to loopback is refused at connection time, even though the server is listening
+        async with webhooks.http_client(allowed=[]) as http:
+            with pytest.raises(httpx.ConnectError, match="not public"):
+                await http.post(f"http://localhost:{port}/in", content=b"{}")
+        # An allowed host gets through, which shows the refusal above came from the guard
+        async with webhooks.http_client(allowed=["localhost"]) as http:
+            assert (await http.post(f"http://localhost:{port}/in", content=b"{}")).status_code == 204
+

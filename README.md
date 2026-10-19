@@ -16,7 +16,7 @@ Python, FastAPI, PostgreSQL, Redis, with a React and TypeScript dashboard, OpenT
 | 20 parallel retries of one payment | exactly **1** payment created, 19 replays |
 | 10 parallel full payments on one invoice | exactly **1** accepted, 9 refused |
 | Ledger after the load test | debits minus credits = **0** |
-| Test suite (real PostgreSQL and Redis) | 21 tests, all passing in CI |
+| Test suite (real PostgreSQL and Redis) | 23 tests, all passing in CI |
 
 Details and caveats: [`docs/loadtest-results.md`](docs/loadtest-results.md).
 
